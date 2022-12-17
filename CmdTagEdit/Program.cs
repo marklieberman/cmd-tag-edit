@@ -1,112 +1,187 @@
-﻿// See https://aka.ms/new-console-template for more information
-using Microsoft.Extensions.Configuration;
+﻿using CmdTagEdit;
+using System.CommandLine;
+using System.Drawing;
+using System.Drawing.Imaging;
 
-var builder = new ConfigurationBuilder();
-builder.AddCommandLine(args);
+// See https://aka.ms/new-console-template for more information
 
-var config = builder.Build();
+var fileOption = new Option<string>(
+        name: "--file",
+        description: "File to tag."
+);
+fileOption.IsRequired = true;
+var artistOption = new Option<string>(
+        name: "--artist"
+);
+var albumArtistOption = new Option<string>(
+        name: "--album-artist"
+);
+var albumOption = new Option<string>(
+        name: "--album"
+);
+var titleOption = new Option<string>(
+        name: "--title"
+);
+var trackOption = new Option<string>(
+        name: "--track"
+);
+var yearOption = new Option<int?>(
+        name: "--year"
+);
+var genreOption = new Option<string>(
+        name: "--genre"
+);
+var coverUrlOption = new Option<string>(
+        name: "--cover-url"
+);
 
-var input = config["input"];
-if (String.IsNullOrEmpty(input))
+var rootCommand = new Command("tag", "Write tags in a file.")
 {
-    Console.WriteLine("--input is required");
-    return;
-}
+    fileOption,
+    artistOption,
+    albumArtistOption,
+    albumOption,
+    titleOption,
+    trackOption,
+    genreOption,
+    yearOption,    
+    coverUrlOption
+};
 
-if (!File.Exists(input))
+rootCommand.SetHandler(async (context) =>
 {
-    Console.WriteLine($"Cannot find the file: {input}");
-    return;
-}
+    await tag(
+        context.ParseResult.GetValueForOption(fileOption),
+        context.ParseResult.GetValueForOption(artistOption),
+        context.ParseResult.GetValueForOption(albumArtistOption),
+        context.ParseResult.GetValueForOption(albumOption),
+        context.ParseResult.GetValueForOption(titleOption),
+        context.ParseResult.GetValueForOption(trackOption),
+        context.ParseResult.GetValueForOption(genreOption),
+        context.ParseResult.GetValueForOption(yearOption),
+        context.ParseResult.GetValueForOption(coverUrlOption)
+    );
+});
 
-var model = TagLib.File.Create(input);
-var modified = false;
+return await rootCommand.InvokeAsync(args);
 
-// Artist
-var artist = config["artist"];
-if (!String.IsNullOrEmpty(artist))
+async Task tag (string? file, string? artist, string? albumArtist, string? album, string? title, string? track, string? genre, int? year, string? coverUrl)
 {
-    model.Tag.Performers = artist.Split("/");
-    modified |= true;
-}
-
-// Album Artist
-var albumArtist = config["albumartist"];
-if (!String.IsNullOrEmpty(albumArtist))
-{
-    model.Tag.AlbumArtists = albumArtist.Split("/");
-    modified |= true;
-}
-
-// Album
-var album = config["album"];
-if (!String.IsNullOrEmpty(album))
-{
-    model.Tag.Album = album;
-    modified |= true;
-}
-
-// Title
-var title = config["title"];
-if (!String.IsNullOrEmpty(title))
-{
-    model.Tag.Title = title;
-    modified |= true;
-}
-
-// Track
-var rawTrack = config["track"];
-if (!String.IsNullOrEmpty(rawTrack))
-{
-    var parts = rawTrack.Split("/");
-    if (parts.Length >= 1)
+    if (!File.Exists(file))
     {
-        if (uint.TryParse(parts[0], out uint track))
-        {
-            model.Tag.Track = track;
-            modified |= true;
-        }
-        else
-        {
-            Console.WriteLine($"Track '{parts[0]}' is not valid");
-        }
+        Console.WriteLine($"Cannot find the file: ${file}");
+        return;
     }
-    if (parts.Length == 2)
-    {
-        if (uint.TryParse(parts[1], out uint count))
-        {
-            model.Tag.TrackCount = count;
-            modified |= true;
-        }
-        else
-        {
-            Console.WriteLine($"Track count '{parts[1]}' is not valid");
-        }
-    }
-}
 
-// Year
-var rawYear = config["year"];
-if (!String.IsNullOrEmpty(rawYear) )
-{
-    if (uint.TryParse(rawYear, out uint year))
+    var model = new ATL.Track(file);
+    bool modified = false;
+
+    if (!String.IsNullOrEmpty(artist))
     {
-        model.Tag.Year = year;
+        model.Artist = artist;
         modified |= true;
+    }
+
+    if (!String.IsNullOrEmpty(albumArtist))
+    {
+        model.AlbumArtist = albumArtist;
+        modified |= true;
+    }
+
+    if (!String.IsNullOrEmpty(album))
+    {
+        model.Album = album;
+        modified |= true;
+    }
+
+    if (!String.IsNullOrEmpty(title))
+    {
+        model.Title = title;
+        modified |= true;
+    }
+
+    if (!String.IsNullOrEmpty(track))
+    {
+        var parts = track.Split("/");
+        if (parts.Length >= 1)
+        {
+            if (int.TryParse(parts[0], out int trackNumber))
+            {
+                model.TrackNumber = trackNumber;
+                modified |= true;
+            }
+            else
+            {
+                Console.WriteLine($"Track '{parts[0]}' is not valid");
+            }
+        }
+        if (parts.Length == 2)
+        {
+            if (int.TryParse(parts[1], out int trackTotal))
+            {
+                model.TrackTotal = trackTotal;
+                modified |= true;
+            }
+            else
+            {
+                Console.WriteLine($"Track count '{parts[1]}' is not valid");
+            }
+        }
+    }
+
+    if (!String.IsNullOrEmpty(genre))
+    {
+        model.Genre = genre;
+        modified |= true;
+    }
+
+    if (year != null)
+    {
+        model.Year = year;
+        modified |= true;
+    }
+
+    if (!String.IsNullOrEmpty(coverUrl))
+    {
+        // Remove any existing artwork.
+        var coverIndex = 0;
+        while (coverIndex > -1)
+        {
+            coverIndex = model.EmbeddedPictures.FindIndex(0, p => p.PicType == ATL.PictureInfo.PIC_TYPE.Front);
+            if (coverIndex > -1)
+            {
+                model.EmbeddedPictures.RemoveAt(coverIndex);
+                modified |= true;
+            }
+        }
+
+        // Embed the new artwork.        
+        try
+        {
+            // TODO Need to convert WebP to JPG.
+            Console.Write("Embedding artwork: Front...");
+            var data = await new HttpClient().GetByteArrayAsync(coverUrl);
+            ATL.PictureInfo coverArt = ATL.PictureInfo.fromBinaryData(data, ATL.PictureInfo.PIC_TYPE.Front);
+            model.EmbeddedPictures.Add(coverArt);            
+            Console.WriteLine("Done");
+
+            modified |= true;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Failed to embed artwork: ${ex.Message} ${ex.StackTrace}");
+        }
+    }
+
+    // Save the tag.
+    if (modified)
+    {
+        Console.WriteLine("Writing tag.");
+        model.Save();
     }
     else
     {
-        Console.WriteLine($"Year '{rawYear}' is not valid");
+        Console.WriteLine("No changes");
     }
 }
 
-// Save the tag.
-if (modified)
-{
-    Console.WriteLine("Writing tag.");
-    model.Save();
-}
-else 
-{
-    Console.WriteLine("No changes");
-}
